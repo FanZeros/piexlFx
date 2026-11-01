@@ -1,0 +1,44 @@
+# 构建产物与运行时状态
+.build/
+dist/
+.cli/
+logs/
+*.log
+.tmp/
+
+# Maker 平台配置（含发布身份信息，不公开）
+.project/
+
+# 引擎知识与工具（由 ai-dev-kit 提供，非本项目源码）
+engine-docs/
+editor-docs/
+examples/
+lua-tools/
+schemas/
+skills/
+templates/
+tools/
+urhox-libs/
+AGENTS.md
+CLAUDE.md
+.emmylua/
+
+# 编辑器 / IDE / agent 配置
+.vscode/
+.cursor/
+.codex/
+.gemini/
+.claude/
+
+# 临时与系统文件
+*.crswap
+.DS_Store
+_uploads/
+_outputs/
+
+# 大体积二进制工具（需要时自行安装）
+vendor/render-tools/
+vendor/**/*.zip
+vendor/**/node_modules/
+vendor/**/.godot/
+vendor/**/.import/

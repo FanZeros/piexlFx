@@ -1,0 +1,2 @@
+Copyright (c) 2026 Hugo Duprez. MIT License. Source: https://www.spritefusion.com/pixel-art-vfx
+Original source declarations retained in vendor/SpriteFusion/.
