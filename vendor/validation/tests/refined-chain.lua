@@ -35,7 +35,10 @@ end
 SubscribeToEvent("Update",function(eventType,eventData)
     HandleUpdate(eventType,eventData)
     ticks=ticks+1
-    if ticks==10 then
+    if ticks==3 then
+        local button=Find(UI.GetRoot(),"text","返回战斗精选")
+        button.props.onClick(button)
+    elseif ticks==10 then
         CheckGeometry()
         local card=Find(UI.GetRoot(),"id","chain-lightning")
         local canvas=Canvas(card)

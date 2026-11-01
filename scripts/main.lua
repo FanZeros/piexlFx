@@ -4,21 +4,24 @@ local Catalog = require("GalleryCatalog")
 local Battle = require("BattleCatalog")
 local EffectCanvas = require("EffectCanvas")
 local ChainLightning = require("ChainLightning")
+local Mota = require("MotaCatalog")
+local MotaCanvas = require("MotaCanvas")
 
 ---@class GalleryState : GalleryPlayback
 ---@field source string
 ---@field scrollY number
 ---@field battle boolean
 ---@field group string
+---@field mota boolean
 ---@type GalleryState
-local state = { source = "全部", scrollY = 0, paused = false, speed = 1.0, checker = false, time = 0, battle = true, group = "全部精选" }
+local state = { source = "全部", scrollY = 0, paused = false, speed = 1.0, checker = false, time = 0, battle = true, group = "全部需求", mota = true }
 ---@type Panel?
 local root = nil
 ---@type ScrollView?
 local galleryScroll = nil
 ---@type Button?
 local pauseButton = nil
----@type ChainLightning?
+---@type ChainLightning|MotaCanvas|nil
 local detailLightning = nil
 local filtered = {}
 local rebuild = false
@@ -66,12 +69,17 @@ local function InitUI()
     UI.Init({ theme = theme, scale = UI.Scale.DEFAULT })
 end
 
+local function CurrentEntries()
+    return state.mota and Mota.entries or (state.battle and Battle.entries or Catalog.entries)
+end
+
 local function FilterEntries()
     filtered = {}
-    local entries = state.battle and Battle.entries or Catalog.entries
+    local entries = CurrentEntries()
     for _, entry in ipairs(entries) do
         local matchesSource = state.source == "全部" or state.source == entry.source
-        local matchesGroup = not state.battle or state.group == "全部精选" or state.group == entry.battleGroup
+        local matchesGroup = state.mota and (state.group == "全部需求" or state.group == entry.battleGroup)
+            or (not state.mota and (not state.battle or state.group == "全部精选" or state.group == entry.battleGroup))
         if matchesSource and matchesGroup then
             table.insert(filtered, entry)
         end
@@ -98,6 +106,11 @@ local function ReplayPlayback()
 end
 
 local function CreateCanvas(entry, height)
+    if entry.procedural == "mota" then
+        local canvas = MotaCanvas { width = "100%", height = height }
+        canvas:SetEntry(entry, state)
+        return canvas
+    end
     if entry.procedural == "chain-lightning" then
         local canvas = ChainLightning { width = "100%", height = height }
         canvas:SetEntry(entry, state)
@@ -125,10 +138,27 @@ local function ShowDetail(entry)
         contentPanel:AddChild(UI.Label { text = entry.description or "原项目生成器导出的动画帧。", fontSize = 11, fontColor = "#A0A0C0", whiteSpace = "normal" })
         contentPanel:AddChild(Label(string.format("%d × %d  |  %d 帧  |  %s", entry.width, entry.height, entry.count, entry.license), 10, "#21BDAE"))
         contentPanel:AddChild(UI.Label { text = entry.origin, fontSize = 9, fontColor = "#A0A0C0", whiteSpace = "normal" })
+    elseif entry.procedural == "mota" then
+        local d = Mota.definitions[entry.effectId]
+        contentPanel:AddChild(UI.Label { text = entry.description, fontSize = 10, fontColor = "#A0A0C0", whiteSpace = "normal" })
+        contentPanel:AddChild(Label(string.format("%d×%dpx · 锚点(%d,%d) · %.2fs · %s", d.width,d.height,d.anchorX,d.anchorY,d.duration,d.loop and "循环" or "单次/间隔预览"),9,"#21BDAE"))
     else
         contentPanel:AddChild(UI.Label { text = "聚能 → 首击 → 五目标连锁 → 残电消散 · 0.14秒/跳 · 逐跳衰减18%", fontSize = 10, fontColor = "#A0A0C0", whiteSpace = "normal" })
     end
     modal:AddContent(contentPanel)
+    if entry.procedural == "mota" then
+        local effect = canvas --[[@as MotaCanvas]]
+        detailLightning = effect
+        local variant = Button(effect:GetVariantText(),function() end,false,112)
+        variant.props.onClick = function() effect:ChangeVariant();variant:SetText(effect:GetVariantText()) end
+        modal:AddContent(UI.Panel {flexDirection="row",gap=8,flexWrap="wrap",children={
+            Button("原配色",function() effect:SetPalette(1) end,true,80),
+            Button("橙红",function() effect:SetPalette(2) end,false,72),
+            Button("紫色",function() effect:SetPalette(3) end,false,72),
+            variant,
+            Button("场景/纯特效",function() effect:ToggleClean() end,false,110),
+        }})
+    end
     if entry.procedural == "chain-lightning" then
         local lightning = canvas --[[@as ChainLightning]]
         detailLightning = lightning
@@ -141,7 +171,9 @@ local function ShowDetail(entry)
     end
     modal:SetFooter(UI.Panel { flexDirection = "row", gap = 10, justifyContent = "flex-end", children = {
         Button("重播技能", function()
-            if entry.procedural then (canvas --[[@as ChainLightning]]):Replay() else state.time = 0 end
+            if entry.procedural then
+                if detailLightning then detailLightning:Replay() end
+            else ReplayPlayback() end
         end, false, 110),
         Button("关闭预览", function() modal:Close() end, true, 120),
     } })
@@ -164,7 +196,7 @@ local function CreateCard(entry, cardWidth, canvasHeight)
             canvas,
             UI.Panel { flexDirection = "row", justifyContent = "space-between", children = {
                 Label(entry.battleGroup or entry.source, 9, "#21BDAE"),
-                Label(entry.procedural and "实时连锁 · 点击放大" or (tostring(entry.count) .. " 帧 · 点击放大"), 8, "#74749B"),
+                Label(entry.procedural and "程序化 · 点击放大" or (tostring(entry.count) .. " 帧 · 点击放大"), 8, "#74749B"),
             } },
             UI.Label { text = entry.usage or entry.source, fontSize = 9, fontColor = "#A0A0C0", whiteSpace = "normal", maxLines = 2 },
         },
@@ -172,6 +204,9 @@ local function CreateCard(entry, cardWidth, canvasHeight)
 end
 
 local function CreateUI()
+    -- 根树重建前先退出overlay，避免窗口变化后留下已销毁弹窗的输入遮罩。
+    local overlays=UI.GetOverlayStack()
+    for i=#overlays,1,-1 do overlays[i]:Close() end
     detailLightning = nil
     pauseButton = nil
     FilterEntries()
@@ -188,7 +223,7 @@ local function CreateUI()
     local cards = {}
     local gridRows = {}
     for _, entry in ipairs(filtered) do
-        if entry.procedural then
+        if entry.procedural == "chain-lightning" or (entry.effectId and entry.effectId:sub(1,5)=="demo/") then
             table.insert(gridRows, UI.Panel { width = "100%", children = {
                 CreateCard(entry, available - 16, math.min(460, math.max(320, UI.GetHeight() * 0.52))),
             } })
@@ -201,7 +236,7 @@ local function CreateUI()
         for j = i, math.min(i + cols - 1, #cards) do table.insert(rowCards, cards[j]) end
         table.insert(gridRows, UI.Panel { width = "100%", flexDirection = "row", gap = 14, children = rowCards })
     end
-    local entries = state.battle and Battle.entries or Catalog.entries
+    local entries = CurrentEntries()
     local sourceButtons = {}
     table.insert(sourceButtons, Button("全部来源  /  " .. #entries, function() SetSource("全部") end, state.source == "全部", wide and "100%" or 155))
     for _, info in ipairs(Catalog.sources) do
@@ -211,11 +246,15 @@ local function CreateUI()
             table.insert(sourceButtons, Button(info.name .. "  /  " .. n, function() SetSource(info.name) end, state.source == info.name, wide and "100%" or 155))
         end
     end
-    if state.battle then
+    if state.mota then
+        local n=0
+        for _,entry in ipairs(entries) do if entry.source=="魔塔实时" then n=n+1 end end
+        table.insert(sourceButtons,Button("魔塔实时  /  "..n,function() SetSource("魔塔实时") end,state.source=="魔塔实时",wide and "100%" or 155))
+    elseif state.battle then
         table.insert(sourceButtons, Button("实时技能  /  1", function() SetSource("实时技能") end, state.source == "实时技能", wide and "100%" or 155))
     end
-    local selectedInfo = state.battle and "玩家在下方，攻击朝上。精选按用途分类；带地面效果、原版方向和适配限制见卡片详情。" or "来自真实项目源码的离线导出；点击卡片可放大。"
-    if not state.battle then
+    local selectedInfo = state.mota and "魔塔需求 · 纯Lua程序绘制，无新增图片。P0单段模块+编排演示，P1高频打击，P2轻量状态。" or (state.battle and "玩家在下方，攻击朝上。精选按用途分类；带地面效果、原版方向和适配限制见卡片详情。" or "来自真实项目源码的离线导出；点击卡片可放大。")
+    if not state.mota and not state.battle then
         for _, info in ipairs(Catalog.sources) do
             if info.name == state.source then selectedInfo = info.note end
         end
@@ -237,8 +276,8 @@ local function CreateUI()
         children = { sidebar },
     }
     local groupButtons = {}
-    if state.battle then
-        for _, group in ipairs(Battle.groups) do
+    if state.mota or state.battle then
+        for _, group in ipairs(state.mota and Mota.groups or Battle.groups) do
             table.insert(groupButtons, Button(group, function()
                 state.group = group
                 state.scrollY = 0
@@ -257,7 +296,7 @@ local function CreateUI()
     }
     local content = UI.Panel { flexGrow = 1, flexBasis = 0, minWidth = 0, minHeight = 0, gap = 12, children = {
         UI.Panel { flexDirection = "row", alignItems = "center", gap = 12, children = {
-            Label(state.battle and "竖版战斗精选" or (state.source == "全部" and "特效总览" or state.source), 16, "#F0F0F0"),
+            Label(state.mota and "魔塔需求特效" or (state.battle and "竖版战斗精选" or (state.source == "全部" and "特效总览" or state.source)), 16, "#F0F0F0"),
             Label(tostring(#filtered) .. " 组", 10, "#21BDAE"),
         } },
         UI.Label { text = selectedInfo, fontSize = 10, fontColor = "#A0A0C0", whiteSpace = "normal", maxLines = 2 },
@@ -278,7 +317,12 @@ local function CreateUI()
                     Label("PIXEL FX / OPEN SOURCE SHOWCASE", 9, "#21BDAE"),
                 } },
                 UI.Panel { flexDirection = "row", gap = 10, flexWrap = "wrap", children = {
+                    Button(state.mota and "返回战斗精选" or "魔塔需求特效",function()
+                        state.mota=not state.mota;state.battle=true;state.source="全部"
+                        state.group=state.mota and "全部需求" or "全部精选";state.scrollY=0;rebuild=true
+                    end,true,124),
                     Button(state.battle and "查看原始73组" or "竖版战斗精选", function()
+                        state.mota = false
                         state.battle = not state.battle
                         state.source = "全部"
                         state.group = "全部精选"
@@ -308,7 +352,7 @@ function Start()
     CreateUI()
     SubscribeToEvent("Update", "HandleUpdate")
     SubscribeToEvent("KeyDown", "HandleKeyDown")
-    print("[特效画廊] 启动，已载入 " .. #Catalog.entries .. " 组真实来源素材")
+    print("[特效画廊] 启动，原始素材 " .. #Catalog.entries .. " 组，魔塔需求 " .. #Mota.entries .. " 项")
 end
 
 ---@param eventType string

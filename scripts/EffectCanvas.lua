@@ -21,6 +21,7 @@ local UI = require("urhox-libs/UI")
 ---@field previewRotation? number
 ---@field previewFrames? number
 ---@field procedural? string
+---@field effectId? string
 
 ---@class GalleryPlayback
 ---@field source string

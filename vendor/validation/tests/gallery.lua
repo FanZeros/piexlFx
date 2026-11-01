@@ -34,7 +34,9 @@ local savedY = 0
 SubscribeToEvent("Update", function(eventType, eventData)
     HandleUpdate(eventType, eventData)
     ticks = ticks + 1
-    if ticks == 12 then
+    if ticks == 3 then
+        Click("返回战斗精选")
+    elseif ticks == 12 then
         assert(#Battle.entries == 25)
         assert(CountCards(UI.GetRoot()) == 25, "default battle list failed")
         assert(not Find(UI.GetRoot(), "下一页"), "pagination remains")
