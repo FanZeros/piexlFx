@@ -14,10 +14,17 @@ local UI = require("urhox-libs/UI")
 ---@field count number
 ---@field durations number[]
 ---@field license string
+---@field battleGroup? string
+---@field usage? string
+---@field adaptation? string
+---@field previewMotion? string
+---@field previewRotation? number
+---@field previewFrames? number
+---@field procedural? string
 
 ---@class GalleryPlayback
 ---@field source string
----@field page number
+---@field scrollY number
 ---@field time number
 ---@field paused boolean
 ---@field speed number
@@ -86,12 +93,38 @@ function EffectCanvas:Render(vg)
                 if t < duration then break end
                 t = t - duration
             end
-            local scale = math.min((l.w - 16) / entry.width, (l.h - 16) / entry.height)
+            local rotation = math.rad(entry.previewRotation or 0)
+            local sin, cos = math.abs(math.sin(rotation)), math.abs(math.cos(rotation))
+            local displayWidth = entry.width * cos + entry.height * sin
+            local displayHeight = entry.width * sin + entry.height * cos
+            local moving = entry.previewMotion == "up"
+            local scale = math.min((l.w - 16) / displayWidth, (l.h - 16) / displayHeight)
+            if moving then
+                scale = math.min(scale, (l.w - 24) / displayWidth, l.h * 0.38 / displayHeight)
+            end
             if scale >= 1 then scale = math.max(1, math.floor(scale)) end
             local w, h = entry.width * scale, entry.height * scale
-            local x, y = math.floor(l.x + (l.w - w) * 0.5), math.floor(l.y + (l.h - h) * 0.5)
+            local centerX, centerY = l.x + l.w * 0.5, l.y + l.h * 0.5
+            if moving then
+                local halfHeight = displayHeight * scale * 0.5
+                local bottom, top = l.y + l.h - halfHeight - 10, l.y + halfHeight + 10
+                local travel = (state.time % 1.6) / 1.6
+                centerY = bottom + (top - bottom) * travel
+                Rect(vg, math.floor(centerX), top, 1, math.max(0, bottom - top), 35, 54, 66)
+                nvgBeginPath(vg)
+                nvgMoveTo(vg, centerX - 5, top + 6)
+                nvgLineTo(vg, centerX, top)
+                nvgLineTo(vg, centerX + 5, top + 6)
+                nvgStrokeColor(vg, nvgRGB(33, 189, 174))
+                nvgStrokeWidth(vg, 1)
+                nvgStroke(vg)
+            end
             local col, row = (index - 1) % entry.cols, math.floor((index - 1) / entry.cols)
             nvgSave(vg)
+            nvgTranslate(vg, math.floor(centerX), math.floor(centerY))
+            nvgRotate(vg, rotation)
+            local x, y = -w * 0.5, -h * 0.5
+            -- 在帧局部空间裁切，旋转的是单帧，而不是整张图集。
             nvgIntersectScissor(vg, x, y, w, h)
             nvgBeginPath(vg)
             nvgRect(vg, x, y, w, h)

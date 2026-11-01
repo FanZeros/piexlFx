@@ -1,19 +1,30 @@
 -- 基于 scaffold-2d.lua 的像素特效浏览器，使用 PixelForge 主题。
 local UI = require("urhox-libs/UI")
 local Catalog = require("GalleryCatalog")
+local Battle = require("BattleCatalog")
 local EffectCanvas = require("EffectCanvas")
+local ChainLightning = require("ChainLightning")
 
 ---@class GalleryState : GalleryPlayback
 ---@field source string
----@field page number
+---@field scrollY number
+---@field battle boolean
+---@field group string
 ---@type GalleryState
-local state = { source = "全部", page = 1, paused = false, speed = 1.0, checker = false, time = 0 }
+local state = { source = "全部", scrollY = 0, paused = false, speed = 1.0, checker = false, time = 0, battle = true, group = "全部精选" }
 ---@type Panel?
 local root = nil
+---@type ScrollView?
+local galleryScroll = nil
+---@type Button?
+local pauseButton = nil
+---@type ChainLightning?
+local detailLightning = nil
 local filtered = {}
-local pageSize = 6
 local rebuild = false
+local restoreScroll = false
 local lastWidth = 0
+local lastHeight = 0
 
 local function Label(text, size, color)
     return UI.Label { text = text, fontSize = size or 11, fontColor = color or "#F0F0F0", flexShrink = 1 }
@@ -21,7 +32,7 @@ end
 
 local function SetSource(source)
     state.source = source
-    state.page = 1
+    state.scrollY = 0
     rebuild = true
     print("[特效画廊] 切换来源：" .. source)
 end
@@ -57,8 +68,11 @@ end
 
 local function FilterEntries()
     filtered = {}
-    for _, entry in ipairs(Catalog.entries) do
-        if state.source == "全部" or state.source == entry.source then
+    local entries = state.battle and Battle.entries or Catalog.entries
+    for _, entry in ipairs(entries) do
+        local matchesSource = state.source == "全部" or state.source == entry.source
+        local matchesGroup = not state.battle or state.group == "全部精选" or state.group == entry.battleGroup
+        if matchesSource and matchesGroup then
             table.insert(filtered, entry)
         end
     end
@@ -73,30 +87,73 @@ local function Button(text, fn, active, width)
     }
 end
 
+local function TogglePlayback()
+    state.paused = not state.paused
+    if pauseButton then pauseButton:SetText(state.paused and "继续播放" or "暂停播放") end
+end
+
+local function ReplayPlayback()
+    state.time = 0
+    if detailLightning then detailLightning:Replay() end
+end
+
+local function CreateCanvas(entry, height)
+    if entry.procedural == "chain-lightning" then
+        local canvas = ChainLightning { width = "100%", height = height }
+        canvas:SetEntry(entry, state)
+        return canvas
+    end
+    local canvas = EffectCanvas { width = "100%", height = height }
+    canvas:SetEntry(entry, state)
+    return canvas
+end
+
 local function ShowDetail(entry)
     if not root then return end
-    local modal = UI.Modal { title = entry.title .. " / " .. entry.source, size = "lg" }
-    local canvas = EffectCanvas { width = "100%", height = math.min(420, UI.GetHeight() * 0.5) }
-    canvas:SetEntry(entry, state)
-    modal:AddContent(UI.Panel { gap = 12, children = {
-        canvas,
-        Label(entry.description or "原项目生成器导出的动画帧。", 11, "#A0A0C0"),
-        Label(string.format("%d × %d  |  %d 帧  |  %s", entry.width, entry.height, entry.count, entry.license), 10, "#21BDAE"),
-        UI.Label { text = entry.origin, fontSize = 9, fontColor = "#A0A0C0", whiteSpace = "normal" },
-    } })
-    modal:SetFooter(UI.Panel { flexDirection = "row", justifyContent = "flex-end", children = {
+    local modal = UI.Modal {
+        title = entry.title .. " / " .. entry.source,
+        size = UI.GetWidth() < 720 and "fullscreen" or "lg",
+        onClose = function(self)
+            detailLightning = nil
+            self:Destroy()
+        end,
+    }
+    local canvasHeight = entry.procedural and math.min(420, UI.GetHeight() * 0.46) or math.min(420, UI.GetHeight() * 0.5)
+    local canvas = CreateCanvas(entry, canvasHeight)
+    local contentPanel = UI.Panel { gap = 12, children = { canvas } }
+    if not entry.procedural then
+        contentPanel:AddChild(UI.Label { text = entry.description or "原项目生成器导出的动画帧。", fontSize = 11, fontColor = "#A0A0C0", whiteSpace = "normal" })
+        contentPanel:AddChild(Label(string.format("%d × %d  |  %d 帧  |  %s", entry.width, entry.height, entry.count, entry.license), 10, "#21BDAE"))
+        contentPanel:AddChild(UI.Label { text = entry.origin, fontSize = 9, fontColor = "#A0A0C0", whiteSpace = "normal" })
+    else
+        contentPanel:AddChild(UI.Label { text = "聚能 → 首击 → 五目标连锁 → 残电消散 · 0.14秒/跳 · 逐跳衰减18%", fontSize = 10, fontColor = "#A0A0C0", whiteSpace = "normal" })
+    end
+    modal:AddContent(contentPanel)
+    if entry.procedural == "chain-lightning" then
+        local lightning = canvas --[[@as ChainLightning]]
+        detailLightning = lightning
+        modal:AddContent(UI.Panel { flexDirection = "row", gap = 8, flexWrap = "wrap", children = {
+            Button("冰蓝雷霆", function() lightning:SetPalette(1) end, true, 92),
+            Button("紫电秘术", function() lightning:SetPalette(2) end, false, 92),
+            Button("金色雷击", function() lightning:SetPalette(3) end, false, 92),
+            Button("场景/纯特效", function() lightning:ToggleClean() end, false, 112),
+        } })
+    end
+    modal:SetFooter(UI.Panel { flexDirection = "row", gap = 10, justifyContent = "flex-end", children = {
+        Button("重播技能", function()
+            if entry.procedural then (canvas --[[@as ChainLightning]]):Replay() else state.time = 0 end
+        end, false, 110),
         Button("关闭预览", function() modal:Close() end, true, 120),
     } })
-    modal.props.onClose = function() modal:Destroy() end
     root:AddChild(modal)
     modal:Open()
     print("[特效画廊] 放大：" .. entry.id)
 end
 
 local function CreateCard(entry, cardWidth, canvasHeight)
-    local canvas = EffectCanvas { width = "100%", height = canvasHeight }
-    canvas:SetEntry(entry, state)
+    local canvas = CreateCanvas(entry, canvasHeight)
     return UI.Card {
+        id = entry.id,
         width = cardWidth, variant = "outlined", padding = 10, gap = 8, clickable = true,
         backgroundColor = "#16162F", borderColor = "#343459",
         onClick = function() ShowDetail(entry) end,
@@ -106,50 +163,66 @@ local function CreateCard(entry, cardWidth, canvasHeight)
             } },
             canvas,
             UI.Panel { flexDirection = "row", justifyContent = "space-between", children = {
-                Label(entry.source, 9, "#A0A0C0"),
-                Label(tostring(entry.count) .. " 帧 · 点击放大", 8, "#74749B"),
+                Label(entry.battleGroup or entry.source, 9, "#21BDAE"),
+                Label(entry.procedural and "实时连锁 · 点击放大" or (tostring(entry.count) .. " 帧 · 点击放大"), 8, "#74749B"),
             } },
+            UI.Label { text = entry.usage or entry.source, fontSize = 9, fontColor = "#A0A0C0", whiteSpace = "normal", maxLines = 2 },
         },
     }
 end
 
 local function CreateUI()
+    detailLightning = nil
+    pauseButton = nil
     FilterEntries()
     local width = UI.GetWidth()
     lastWidth = width
+    lastHeight = UI.GetHeight()
     local wide = width >= 900
+    local padding = width < 600 and 12 or 24
     local side = wide and 205 or 0
-    local available = width - 48 - side - (wide and 20 or 0)
+    local available = width - padding * 2 - side - (wide and 20 or 0)
     local cols = available >= 900 and 3 or (available >= 480 and 2 or 1)
-    pageSize = cols * 2
-    local pages = math.max(1, math.ceil(#filtered / pageSize))
-    state.page = math.max(1, math.min(state.page, pages))
     local cardWidth = math.floor((available - 16 - (cols - 1) * 14) / cols)
-    local canvasHeight = math.max(110, math.min(180, (UI.GetHeight() - 500) / 2))
+    local canvasHeight = state.battle and 200 or math.max(110, math.min(180, (UI.GetHeight() - 500) / 2))
     local cards = {}
-    for i = (state.page - 1) * pageSize + 1, math.min(state.page * pageSize, #filtered) do
-        table.insert(cards, CreateCard(filtered[i], cardWidth, canvasHeight))
-    end
     local gridRows = {}
+    for _, entry in ipairs(filtered) do
+        if entry.procedural then
+            table.insert(gridRows, UI.Panel { width = "100%", children = {
+                CreateCard(entry, available - 16, math.min(460, math.max(320, UI.GetHeight() * 0.52))),
+            } })
+        else
+            table.insert(cards, CreateCard(entry, cardWidth, canvasHeight))
+        end
+    end
     for i = 1, #cards, cols do
         local rowCards = {}
         for j = i, math.min(i + cols - 1, #cards) do table.insert(rowCards, cards[j]) end
         table.insert(gridRows, UI.Panel { width = "100%", flexDirection = "row", gap = 14, children = rowCards })
     end
+    local entries = state.battle and Battle.entries or Catalog.entries
     local sourceButtons = {}
-    table.insert(sourceButtons, Button("全部特效  /  " .. #Catalog.entries, function() SetSource("全部") end, state.source == "全部", wide and "100%" or 155))
+    table.insert(sourceButtons, Button("全部来源  /  " .. #entries, function() SetSource("全部") end, state.source == "全部", wide and "100%" or 155))
     for _, info in ipairs(Catalog.sources) do
         local n = 0
-        for _, entry in ipairs(Catalog.entries) do if entry.source == info.name then n = n + 1 end end
-        table.insert(sourceButtons, Button(info.name .. "  /  " .. n, function() SetSource(info.name) end, state.source == info.name, wide and "100%" or 155))
+        for _, entry in ipairs(entries) do if entry.source == info.name then n = n + 1 end end
+        if n > 0 then
+            table.insert(sourceButtons, Button(info.name .. "  /  " .. n, function() SetSource(info.name) end, state.source == info.name, wide and "100%" or 155))
+        end
     end
-    local selectedInfo = "来自真实项目源码的离线导出；点击卡片可放大。"
-    for _, info in ipairs(Catalog.sources) do
-        if info.name == state.source then selectedInfo = info.note end
+    if state.battle then
+        table.insert(sourceButtons, Button("实时技能  /  1", function() SetSource("实时技能") end, state.source == "实时技能", wide and "100%" or 155))
+    end
+    local selectedInfo = state.battle and "玩家在下方，攻击朝上。精选按用途分类；带地面效果、原版方向和适配限制见卡片详情。" or "来自真实项目源码的离线导出；点击卡片可放大。"
+    if not state.battle then
+        for _, info in ipairs(Catalog.sources) do
+            if info.name == state.source then selectedInfo = info.note end
+        end
     end
     local sidebar = UI.Panel {
         width = wide and side or "100%", flexDirection = wide and "column" or "row",
-        flexWrap = wide and "no-wrap" or "wrap", gap = 10,
+        flexWrap = "no-wrap", gap = 10,
         children = sourceButtons,
     }
     if wide then
@@ -159,44 +232,73 @@ local function CreateUI()
         sidebar:AddChild(UI.Label { text = "原始文件保留在 vendor/，展示使用 assets/Effects/ 中的图集。", fontSize = 9, fontColor = "#74749B", whiteSpace = "normal" })
         sidebar:AddChild(UI.Label { text = "PixelSpace 为静态背景；其余按原生成器或原场景采样。", fontSize = 9, fontColor = "#74749B", whiteSpace = "normal" })
     end
-    local content = UI.Panel { flexGrow = 1, flexBasis = 0, minWidth = 0, gap = 12, children = {
+    local sourceSelector = wide and sidebar or UI.ScrollView {
+        width = "100%", height = 46, scrollX = true, scrollY = false, bounces = false,
+        children = { sidebar },
+    }
+    local groupButtons = {}
+    if state.battle then
+        for _, group in ipairs(Battle.groups) do
+            table.insert(groupButtons, Button(group, function()
+                state.group = group
+                state.scrollY = 0
+                rebuild = true
+            end, state.group == group, 92))
+        end
+    end
+    galleryScroll = UI.ScrollView {
+        id = "gallery-scroll", flexGrow = 1, flexBasis = 0, minHeight = 0,
+        scrollX = false, scrollY = true, showScrollbar = true,
+        scrollbarInteractive = true, bounces = false,
+        onScroll = function(_, _, y) state.scrollY = y end,
+        children = {
+            UI.Panel { width = "100%", gap = 14, paddingBottom = 8, children = gridRows },
+        },
+    }
+    local content = UI.Panel { flexGrow = 1, flexBasis = 0, minWidth = 0, minHeight = 0, gap = 12, children = {
         UI.Panel { flexDirection = "row", alignItems = "center", gap = 12, children = {
-            Label(state.source == "全部" and "特效总览" or state.source, 16, "#F0F0F0"),
+            Label(state.battle and "竖版战斗精选" or (state.source == "全部" and "特效总览" or state.source), 16, "#F0F0F0"),
             Label(tostring(#filtered) .. " 组", 10, "#21BDAE"),
         } },
-        UI.Label { text = selectedInfo, fontSize = 10, fontColor = "#A0A0C0", whiteSpace = "normal" },
-        UI.ScrollView { flexGrow = 1, flexBasis = 0, children = {
-            UI.Panel { width = "100%", gap = 14, paddingBottom = 8, children = gridRows },
-        } },
-        UI.Panel { height = 42, flexDirection = "row", justifyContent = "space-between", alignItems = "center", children = {
-            Label(string.format("%02d / %02d 页", state.page, pages), 10, "#A0A0C0"),
-            UI.Panel { flexDirection = "row", gap = 10, children = {
-                Button("上一页", function() state.page = state.page > 1 and state.page - 1 or pages; rebuild = true end, false, 96),
-                Button("下一页", function() state.page = state.page < pages and state.page + 1 or 1; rebuild = true end, true, 96),
-            } },
-        } },
+        UI.Label { text = selectedInfo, fontSize = 10, fontColor = "#A0A0C0", whiteSpace = "normal", maxLines = 2 },
+        UI.ScrollView {
+            width = "100%", height = state.battle and 44 or 0, visible = state.battle,
+            scrollX = true, scrollY = false, bounces = false,
+            children = { UI.Panel { flexDirection = "row", gap = 8, children = groupButtons } },
+        },
+        galleryScroll,
+        Label("滚动浏览全部特效 · 点击卡片放大", 9, "#74749B"),
     } }
+    pauseButton = Button(state.paused and "继续播放" or "暂停播放", TogglePlayback, false, 100)
     root = UI.Panel { width = "100%", height = "100%", backgroundColor = "#0F0F23", children = {
-        UI.SafeAreaView { width = "100%", height = "100%", padding = 24, gap = 18, children = {
+        UI.SafeAreaView { width = "100%", height = "100%", padding = padding, gap = width < 600 and 10 or 18, children = {
             UI.Panel { flexDirection = "row", alignItems = "center", justifyContent = "space-between", flexWrap = "wrap", gap = 12, children = {
                 UI.Panel { gap = 4, children = {
                     Label("像素特效实验室", 23, "#F0F0F0"),
                     Label("PIXEL FX / OPEN SOURCE SHOWCASE", 9, "#21BDAE"),
                 } },
                 UI.Panel { flexDirection = "row", gap = 10, flexWrap = "wrap", children = {
-                    Button(state.paused and "继续播放" or "暂停播放", function() state.paused = not state.paused; rebuild = true end, false, 100),
+                    Button(state.battle and "查看原始73组" or "竖版战斗精选", function()
+                        state.battle = not state.battle
+                        state.source = "全部"
+                        state.group = "全部精选"
+                        state.scrollY = 0
+                        rebuild = true
+                    end, true, 124),
+                    pauseButton,
                     Button(tostring(state.speed) .. "× 速度", function() state.speed = state.speed == 0.5 and 1 or (state.speed == 1 and 2 or 0.5); rebuild = true end, false, 96),
                     Button(state.checker and "棋盘背景" or "深色背景", function() state.checker = not state.checker; rebuild = true end, false, 100),
-                    Button("重新播放", function() state.time = 0 end, true, 100),
+                    Button("重新播放", ReplayPlayback, true, 100),
                 } },
             } },
             UI.Panel { height = 2, backgroundColor = "#343459" },
-            UI.Panel { flexGrow = 1, flexBasis = 0, minHeight = 0, flexDirection = wide and "row" or "column", gap = 20, children = { sidebar, content } },
-            Label("SPACE 暂停 / 方向键翻页 / 1–5 切换来源 / R 重播", 9, "#74749B"),
+            UI.Panel { flexGrow = 1, flexBasis = 0, minHeight = 0, flexDirection = wide and "row" or "column", gap = wide and 20 or 8, children = { sourceSelector, content } },
+            Label("鼠标滚轮 / 触摸拖动浏览 / SPACE 暂停 / 1–5 切换来源 / R 重播", 9, "#74749B"),
         } },
     } }
     UI.SetRoot(root, true)
-    print(string.format("[特效画廊] 当前页 %d/%d，显示 %d 个，屏宽 %.0f", state.page, pages, #cards, width))
+    restoreScroll = true
+    print(string.format("[特效画廊] 连续滚动列表，显示 %d 个，屏宽 %.0f", #filtered, width))
 end
 
 function Start()
@@ -213,24 +315,35 @@ end
 ---@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
     if not state.paused then state.time = state.time + eventData:GetFloat("TimeStep") * state.speed end
-    if math.abs(UI.GetWidth() - lastWidth) > 2 then rebuild = true end
-    if rebuild then rebuild = false; CreateUI() end
+    if math.abs(UI.GetWidth() - lastWidth) > 2 or math.abs(UI.GetHeight() - lastHeight) > 2 then rebuild = true end
+    if rebuild then
+        rebuild = false
+        CreateUI()
+    end
+    if restoreScroll and galleryScroll then
+        -- 重建布局后再恢复位置，切换播放控件时不跳回列表顶部。
+        UI.Layout()
+        galleryScroll:UpdateContentSize()
+        galleryScroll:SetScroll(0, state.scrollY)
+        restoreScroll = false
+    end
 end
 
 ---@param eventType string
 ---@param eventData KeyDownEventData
 function HandleKeyDown(eventType, eventData)
     local key = eventData:GetInt("Key")
-    if key == KEY_SPACE then state.paused = not state.paused; rebuild = true end
-    if key == KEY_R then state.time = 0 end
-    if key == KEY_RIGHT then state.page = state.page + 1; rebuild = true end
-    if key == KEY_LEFT then state.page = math.max(1, state.page - 1); rebuild = true end
+    if key == KEY_SPACE then TogglePlayback() end
+    if key == KEY_R then ReplayPlayback() end
     local keys = { KEY_1, KEY_2, KEY_3, KEY_4, KEY_5 }
     for i, k in ipairs(keys) do if key == k and Catalog.sources[i] then SetSource(Catalog.sources[i].name) end end
 end
 
 function Stop()
+    detailLightning = nil
+    pauseButton = nil
     EffectCanvas.ReleaseImages()
     UI.Shutdown()
     root = nil
+    galleryScroll = nil
 end
